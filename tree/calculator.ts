@@ -15,36 +15,40 @@ export class PriceCalculator {
   }
 
   private calculateBound(boundType: 'min'|'max'): number {
-    return this.menuItem.basePrice + 
-      this.processGroups(this.menuItem.customGroups, boundType);
-  }
+    let total = this.menuItem.basePrice;
+    const processedGroups = new Set<string>();
 
-  private processGroups(
-    groupIds: string[],
-    boundType: 'min'|'max',
-    depth = 0
-  ): number {
-    return groupIds.reduce((total, groupId) => {
+    const processGroup = (groupId: string): number => {
+      if (processedGroups.has(groupId)) return 0;
+      processedGroups.add(groupId);
+
       const groupConfig = this.groups.get(groupId);
-      if (!groupConfig) return total;
+      if (!groupConfig) return 0;
 
       const customizations = this.getGroupCustomizations(groupId);
       const sorted = this.sortCustomizations(customizations, boundType);
-      const selectionCount = boundType === 'min' ? groupConfig.min : groupConfig.max;
-      const selected = sorted.slice(0, selectionCount);
+      const limit = boundType === 'min' ? groupConfig.min : groupConfig.max;
+      const selections = sorted.slice(0, limit);
 
-      return total + selected.reduce((sum, customization) => {
+      return selections.reduce((sum, customization) => {
         // Add customization price
         sum += customization.price;
         
-        // Process child groups recursively
-        if (customization.childGroups.length > 0) {
-          sum += this.processGroups(customization.childGroups, boundType, depth + 1);
-        }
+        // Process child groups
+        sum += customization.childGroups.reduce((childSum, childGroupId) => {
+          return childSum + processGroup(childGroupId);
+        }, 0);
         
         return sum;
       }, 0);
-    }, 0);
+    };
+
+    // Process all item's custom groups
+    this.menuItem.customGroups.forEach(groupId => {
+      total += processGroup(groupId);
+    });
+
+    return total;
   }
 
   private getGroupCustomizations(groupId: string): Customization[] {
@@ -58,5 +62,4 @@ export class PriceCalculator {
     return [...customizations].sort((a, b) => 
       boundType === 'min' ? a.price - b.price : b.price - a.price
     );
-  }
-}
+  }}

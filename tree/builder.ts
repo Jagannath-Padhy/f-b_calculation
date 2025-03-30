@@ -3,7 +3,8 @@ import { MenuItem, Customization, Category, CustomGroupConfig, PriceRange } from
 export class MenuTreeBuilder {
   private readonly customGroups: Map<string, CustomGroupConfig>;
   private readonly customizations: Map<string, Customization>;
-  
+  private debugEnabled = true; // Set to false to disable logs
+
   constructor(
     private readonly menuItems: MenuItem[],
     categories: Category[],
@@ -20,11 +21,22 @@ export class MenuTreeBuilder {
     );
   }
 
+  private debugLog(message: string) {
+    if (this.debugEnabled) {
+      console.log(`[DEBUG] ${message}`);
+    }
+  }
+
   buildTrees(): MenuItem[] {
-    return this.menuItems.map(item => ({
-      ...item,
-      priceRange: this.calculatePriceRange(item)
-    }));
+    return this.menuItems.map(item => {
+      this.debugLog(`\n=== Processing item ${item.id} ===`);
+      const result = {
+        ...item,
+        priceRange: this.calculatePriceRange(item)
+      };
+      this.debugLog(`Final range for ${item.id}: ₹${result.priceRange.lower} - ₹${result.priceRange.upper}`);
+      return result;
+    });
   }
 
   private calculatePriceRange(item: MenuItem): PriceRange {
@@ -36,37 +48,56 @@ export class MenuTreeBuilder {
 
   private calculateBound(item: MenuItem, boundType: 'min'|'max'): number {
     let total = item.basePrice;
-    
-    for (const groupId of item.customGroups) {
+    const processedGroups = new Set<string>();
+
+    this.debugLog(`\nCalculating ${boundType.toUpperCase()} bound for ${item.id}`);
+    this.debugLog(`Base price: ₹${total}`);
+
+    const processGroup = (groupId: string, depth = 0): number => {
+      const indent = '  '.repeat(depth);
+      if (processedGroups.has(groupId)) {
+        this.debugLog(`${indent}Group ${groupId} already processed, skipping`);
+        return 0;
+      }
+      processedGroups.add(groupId);
+
       const groupConfig = this.customGroups.get(groupId);
-      if (!groupConfig) continue;
+      if (!groupConfig) {
+        this.debugLog(`${indent}No config found for group ${groupId}`);
+        return 0;
+      }
+
+      this.debugLog(`${indent}Processing group ${groupId} (${groupConfig.min}-${groupConfig.max})`);
 
       const customizations = this.getGroupCustomizations(groupId);
       const sorted = this.sortCustomizations(customizations, boundType);
-      const selections = sorted.slice(0, groupConfig[boundType]);
+      
+      this.debugLog(`${indent}Available customizations (${sorted.length}):`);
+      sorted.forEach(c => this.debugLog(`${indent}- ${c.id}: ₹${c.price} ${c.childGroups.length > 0 ? `→ [${c.childGroups.join(', ')}]` : ''}`));
 
-      total += selections.reduce((sum, c) => 
-        sum + this.calculateCustomization(c, boundType), 0);
-    }
+      const limit = boundType === 'min' ? groupConfig.min : groupConfig.max;
+      const selections = sorted.slice(0, limit);
+      
+      this.debugLog(`${indent}Selecting ${selections.length} customization(s):`);
+      selections.forEach(c => this.debugLog(`${indent}+ ${c.id} (₹${c.price})`));
 
-    return total;
-  }
+      return selections.reduce((sum, customization) => {
+        const customizationTotal = customization.price + 
+          customization.childGroups.reduce((childSum, childGroupId) => 
+            childSum + processGroup(childGroupId, depth + 1), 0);
 
-  private calculateCustomization(customization: Customization, boundType: 'min'|'max'): number {
-    let total = customization.price;
-    
-    for (const childGroupId of customization.childGroups) {
-      const groupConfig = this.customGroups.get(childGroupId);
-      if (!groupConfig) continue;
+        this.debugLog(`${indent}Customization ${customization.id} total: ₹${customizationTotal}`);
+        return sum + customizationTotal;
+      }, 0);
+    };
 
-      const childCustomizations = this.getGroupCustomizations(childGroupId);
-      const sorted = this.sortCustomizations(childCustomizations, boundType);
-      const selections = sorted.slice(0, groupConfig[boundType]);
+    item.customGroups.forEach(groupId => {
+      const groupTotal = processGroup(groupId, 1);
+      this.debugLog(`Group ${groupId} contribution: ₹${groupTotal}`);
+      total += groupTotal;
+    });
 
-      total += selections.reduce((sum, c) => 
-        sum + this.calculateCustomization(c, boundType), 0);
-    }
-
+    this.debugLog(`Current total after all groups: ₹${total}`);
     return total;
   }
 
@@ -75,11 +106,13 @@ export class MenuTreeBuilder {
       .filter(c => c.parentGroupId === groupId);
   }
 
-  private sortCustomizations(customizations: Customization[], boundType: 'min'|'max'): Customization[] {
+  private sortCustomizations(
+    customizations: Customization[], 
+    boundType: 'min'|'max'
+  ): Customization[] {
+    // Pure price-based sorting without default consideration
     return [...customizations].sort((a, b) => 
-      boundType === 'min' 
-        ? a.price - b.price 
-        : b.price - a.price
+      boundType === 'min' ? a.price - b.price : b.price - a.price
     );
   }
 }
